@@ -34,22 +34,15 @@ if [ ! -e ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ]; then
     echo "Checking out version ${KERNEL_VERSION}"
     git checkout ${KERNEL_VERSION}
 
-    # TODO: Add your kernel build steps here
-    git apply /home/tuyenvo/git/assignment-1-thanhtuyenvo/finder-app/fix_yylloc.patch
-    
-    make ARCH=arm64 CROSS_COMPILE=${CROSS_COMPILE} mrproper
-
-    make ARCH=arm64 CROSS_COMPILE=${CROSS_COMPILE} defconfig
-
-    make -j4 ARCH=arm64 CROSS_COMPILE=${CROSS_COMPILE} all
-
-    make ARCH=arm64 CROSS_COMPILE=${CROSS_COMPILE} modules
-
-    make ARCH=arm64 CROSS_COMPILE=${CROSS_COMPILE} dtbs
+    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} mrproper
+    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} defconfig
+    make -j4 ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} all
+    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} modules
+    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} dtbs
 fi
 
 echo "Adding the Image in outdir"
-cp ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ${OUTDIR}/
+cp ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ${OUTDIR}
 
 echo "Creating the staging directory for the root filesystem"
 cd "$OUTDIR"
@@ -59,13 +52,11 @@ then
     sudo rm  -rf ${OUTDIR}/rootfs
 fi
 
-# TODO: Create necessary base directories
-mkdir rootfs
-cd rootfs
+mkdir ${OUTDIR}/rootfs
+cd ${OUTDIR}/rootfs
 mkdir -p bin dev etc home lib lib64 proc sbin sys tmp usr var
 mkdir -p usr/bin usr/lib usr/sbin
 mkdir -p var/log
-# tree
 
 cd "$OUTDIR"
 if [ ! -d "${OUTDIR}/busybox" ]
@@ -73,17 +64,14 @@ then
 git clone git://busybox.net/busybox.git
     cd busybox
     git checkout ${BUSYBOX_VERSION}
-    # TODO:  Configure busybox
+    make distclean
+    make defconfig
 else
     cd busybox
 fi
 
-# TODO: Make and install busybox
-
-make clean
-make defconfig
 make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE}
-make CONFIG_PREFIX="$OUTDIR/rootfs" ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} install
+make CONFIG_PREFIX=${OUTDIR}/rootfs ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} install
 
 cd ${OUTDIR}/rootfs
 echo "Library dependencies"
@@ -97,7 +85,7 @@ cp ${SYSROOT}/lib64/libresolv.so.2 lib64
 cp ${SYSROOT}/lib64/libc.so.6 lib64
 
 sudo mknod -m 666 dev/null c 1 3
-sudo mknod -m 666 dev/console c 5 1
+sudo mknod -m 600 dev/console c 5 1
 
 cd ${FINDER_APP_DIR}
 make clean
@@ -115,4 +103,3 @@ sudo chown -R root:root *
 
 find . | cpio -H newc -ov --owner root:root > ${OUTDIR}/initramfs.cpio
 gzip -f ${OUTDIR}/initramfs.cpio
-
