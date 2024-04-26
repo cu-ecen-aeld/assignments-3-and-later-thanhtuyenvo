@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # Define two variables for file directory and the string that we need to search
 FILESDIR=''
 SEARCHSTR=''
