@@ -1,14 +1,19 @@
-SRC := aesdsocket.c
-TARGET = aesdsocket
-CFLAGS := -Wall -Werror
-OBJS := $(SRC:.c=.o)
+CROSS_COMPILE ?=
+CC ?= $(CROSS-COMPILE)gcc
 
-all: $(TARGET)
+CFLAGS += -g -Wall -Werror -pedantic -std=c99 -pthread -lrt
+LDFLAGS += -g -Wall -Werror -pedantic -std=c99 -pthread -lrt
 
-# if crosscompile is specified, prepend that to gcc
-$(TARGET) : $(OBJS)
-# $(TARGET) : writer.c
-	$(CC) $(CFLAGS) $(INCLUDES) $(OBJS) -o $(TARGET) $(LDFLAGS)
+all: aesdsocket
 
 clean:
-	-rm -f *.o $(TARGET) *.elf *.map
+	rm -rf *.o
+	rm -rf aesdsocket
+
+aesdsocket: aesdsocket.o
+	$(CC) -o aesdsocket aesdsocket.o $(LDFLAGS)
+
+%.o: %.c
+	$(CC) $(INCLUDES) -c -o $@ $< $(CFLAGS)
+
+.PHONY: clean all
