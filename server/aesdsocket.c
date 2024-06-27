@@ -22,9 +22,18 @@
 #include <pthread.h>
 #include <sys/queue.h>
 
+#ifndef USE_AESD_CHAR_DEVICE
+    #define USE_AESD_CHAR_DEVICE 1
+#endif
+
 #define LISTEN_BACKLOG 64
 #define BUFFER_SIZE 64
-#define TMP_PATH "/var/tmp/aesdsocketdata"
+
+#if USE_AESD_CHAR_DEVICE == 1
+    #define TMP_PATH "/dev/aesdchar"
+#else
+    #define TMP_PATH "/var/tmp/aesdsocketdata"
+#endif
 
 SLIST_HEAD(thread_list_t, thread_list_entry) thread_list_head = SLIST_HEAD_INITIALIZER(thread_list_head);
 
@@ -35,7 +44,6 @@ struct thread_list_entry {
 };
 
 static bool shutdown_signal = false;
-static FILE* output_file = NULL;
 static pthread_mutex_t file_mutex;
 
 struct thread_args {
@@ -49,36 +57,45 @@ static void signal_handler(int signal_number) {
     shutdown_signal = true;
 }
 
-static void timer_handler(union sigval sigval) {
-    if(pthread_mutex_lock(&file_mutex) != 0) {
-        syslog(LOG_ERR, "Mutex lock failed");
+#if USE_AESD_CHAR_DEVICE != 1
+    static void timer_handler(union sigval sigval) {
+        if(pthread_mutex_lock(&file_mutex) != 0) {
+            syslog(LOG_ERR, "Mutex lock failed");
+            return;
+        }
+
+        FILE *output_file = fopen(TMP_PATH, "a+");
+        if(output_file == NULL) {
+            syslog(LOG_ERR, "Cannot open output file");
+            exit(-1);
+        }
+
+        char outstr[256] = "timestamp:";
+        size_t outstr_target_len = sizeof(outstr) - strlen(outstr);
+        char* outstr_target = outstr + strlen(outstr);
+
+        time_t t;
+        struct tm *tmp;
+
+        t = time(NULL);
+        tmp = localtime(&t);
+        if(tmp == NULL) {
+            syslog(LOG_ERR, "Getting time failed");
+        } else if (strftime(outstr_target, outstr_target_len, "%a, %d %b %Y %T %z\n", tmp) == 0) {
+            syslog(LOG_ERR, "Getting time failed, strftime");
+        } else if(fputs(outstr, output_file) < 0) {
+            syslog(LOG_ERR, "Getting time failed, strftime");
+        }
+
+        fflush(output_file);
+        fclose(output_file);
+        
+        if(pthread_mutex_unlock(&file_mutex)) {
+            syslog(LOG_ERR, "Mutex unlock failed");
+        }
         return;
     }
-
-    char outstr[256] = "timestamp:";
-    size_t outstr_target_len = sizeof(outstr) - strlen(outstr);
-    char* outstr_target = outstr + strlen(outstr);
-
-    time_t t;
-    struct tm *tmp;
-
-    t = time(NULL);
-    tmp = localtime(&t);
-    if(tmp == NULL) {
-        syslog(LOG_ERR, "Getting time failed");
-    } else if (strftime(outstr_target, outstr_target_len, "%a, %d %b %Y %T %z\n", tmp) == 0) {
-        syslog(LOG_ERR, "Getting time failed, strftime");
-    } else if(fputs(outstr, output_file) < 0) {
-        syslog(LOG_ERR, "Getting time failed, strftime");
-    }
-
-    fflush(output_file);
-    
-    if(pthread_mutex_unlock(&file_mutex)) {
-        syslog(LOG_ERR, "Mutex unlock failed");
-    }
-    return;
-}
+#endif
 
 static int setup_server(bool is_daemon) {
     assert(sizeof(unsigned char) == 1);
@@ -86,12 +103,6 @@ static int setup_server(bool is_daemon) {
     openlog(NULL, 0, LOG_USER);
 
     SLIST_INIT(&thread_list_head);
-
-    output_file = fopen(TMP_PATH, "a+");
-    if(output_file == NULL) {
-        syslog(LOG_ERR, "Cannot open output file");
-        exit(-1);
-    }
 
     if(pthread_mutex_init(&file_mutex, NULL) != 0) {
         syslog(LOG_ERR, "Cannot create mutex");
@@ -146,27 +157,29 @@ static int setup_server(bool is_daemon) {
         }
     }
 
-    // setup signal handler for timer
-    struct sigevent sev;
-    timer_t timerid;
-    memset(&sev, 0, sizeof(sev));
-    sev.sigev_notify = SIGEV_THREAD;
-    sev.sigev_notify_function = &timer_handler;
-    if(timer_create(CLOCK_MONOTONIC, &sev, &timerid) == -1) {
-        syslog(LOG_ERR, "Cannot register for timer signal handler");
-        exit(-1);
-    }
+    #if USE_AESD_CHAR_DEVICE != 1
+        // setup signal handler for timer
+        struct sigevent sev;
+        timer_t timerid;
+        memset(&sev, 0, sizeof(sev));
+        sev.sigev_notify = SIGEV_THREAD;
+        sev.sigev_notify_function = &timer_handler;
+        if(timer_create(CLOCK_MONOTONIC, &sev, &timerid) == -1) {
+            syslog(LOG_ERR, "Cannot register for timer signal handler");
+            exit(-1);
+        }
 
-    // actually start timer
-    struct itimerspec its;
-    its.it_value.tv_sec = 10;
-    its.it_value.tv_nsec = 0;
-    its.it_interval.tv_sec = its.it_value.tv_sec;
-    its.it_interval.tv_nsec = its.it_value.tv_nsec;
-    if (timer_settime(timerid, 0, &its, NULL) == -1) {
-        syslog(LOG_ERR, "Could not start timer.");
-        exit(-1);
-    }
+        // actually start timer
+        struct itimerspec its;
+        its.it_value.tv_sec = 10;
+        its.it_value.tv_nsec = 0;
+        its.it_interval.tv_sec = its.it_value.tv_sec;
+        its.it_interval.tv_nsec = its.it_value.tv_nsec;
+        if (timer_settime(timerid, 0, &its, NULL) == -1) {
+            syslog(LOG_ERR, "Could not start timer.");
+            exit(-1);
+        }
+    #endif
 
     return socket_fd;
 }
@@ -230,6 +243,12 @@ static int run_thread_handler(struct thread_args *args) {
         return -1;
     }
 
+    FILE *output_file = fopen(TMP_PATH, "a+");
+    if(output_file == NULL) {
+        syslog(LOG_ERR, "Cannot open output file");
+        exit(-1);
+    }
+
     clearerr(output_file);
     if(socket_to_file(buffer, BUFFER_SIZE, output_file, args->server_fd) != 0) {
         return -1;
@@ -239,6 +258,8 @@ static int run_thread_handler(struct thread_args *args) {
     if(file_to_socket(buffer, BUFFER_SIZE, output_file, args->server_fd) != 0) {
         return -1;
     }
+
+    fclose(output_file);
 
     if(pthread_mutex_unlock(&file_mutex)) {
         syslog(LOG_ERR, "Mutex unlock failed");
@@ -342,6 +363,9 @@ int main(int argc, char** argv) {
     }
     
     close(socket_fd);
-    unlink(TMP_PATH);
+
+    #if USE_AESD_CHAR_DEVICE != 1
+        unlink(TMP_PATH);
+    #endif
     return EXIT_SUCCESS;
 }
